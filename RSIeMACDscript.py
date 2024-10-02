@@ -15,10 +15,14 @@ RSI_PERIOD = 14
 INVESTMENT_AMOUNT_PER_TRADE = 10
 HOLDING_QUANTITY = 0
 
-CCXT_TICKER_NAME = 'BTC/EUR'
-TRADING_TICKER_NAME = 'BTC/EUR'
-exchange = ccxt.bitpanda({
-    'apiKey': open('apikey', 'r').read()
+CCXT_TICKER_NAME = 'FET/USDT'
+TRADING_TICKER_NAME = 'FET/USDT'
+exchange = ccxt.binance({
+# meglio open?
+    'apiKey': open(' ', 'r').read()
+    'secret': ' ',
+    'enableRateLimit': True,
+# options for future: 'options': {'defaultType': 'future'}
 })
 
 
