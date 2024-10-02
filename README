@@ -1,2 +1,71 @@
-this is the repo for testing trading scripts
+Questo script implementa un bot di trading automatico che utilizza dati di mercato in tempo reale per prendere decisioni di acquisto o vendita sulla base di indicatori tecnici. Qui di seguito un commento dettagliato del codice:
 
+Importazione delle librerie:
+import time
+from datetime import datetime
+import ccxt as ccxt
+import pandas as pd
+import numpy as np
+import talib
+
+ccxt: libreria per interagire con le API degli exchange di criptovalute.
+pandas: utilizzata per la gestione dei dati strutturati.
+numpy: libreria per calcoli numerici.
+talib: libreria per calcolare gli indicatori tecnici, come il MACD e RSI, usati comunemente nel trading.
+
+Inizializzazione delle variabili:
+CANDLE_DURATION_IN_MIN = 1
+RSI_OVERSOLD = 25
+RSI_OVERBOUGHT = 75
+RSI_PERIOD = 14
+INVESTMENT_AMOUNT_PER_TRADE = 10
+HOLDING_QUANTITY = 0
+CCXT_TICKER_NAME = 'BTC/EUR'
+TRADING_TICKER_NAME = 'BTC/EUR'
+Definisce i parametri di trading: durata delle candele in minuti, soglie per RSI (ipercomprato/ipersvenduto), quantità di investimento per ogni trade, e la coppia di valute su cui operare (BTC/EUR).
+
+Connessione all'API dell'exchange:
+exchange = ccxt.bitpanda({
+    'apiKey': open('apikey', 'r').read()
+})
+Usa la libreria ccxt per connettersi all'exchange Bitpanda, leggendo l'API key da un file.
+
+Funzione fetch_data(ticker):
+def fetch_data(ticker):
+    # fetching the historical candlestick data (OHLCV) from the exchange
+    ...
+Raccoglie i dati OHLCV (Open, High, Low, Close, Volume) dalla coppia di valute scelta. Converte i dati in un DataFrame di pandas e aggiunge una colonna con il timestamp convertito.
+
+Funzione get_trade_recommendation(ticker_df):
+def get_trade_recommendation(ticker_df):
+    # Calculate MACD and RSI and determine buy or sell signals
+    ...
+Calcola due indicatori tecnici:
+
+MACD (Moving Average Convergence Divergence): individua i punti di crossover tra la linea MACD e il segnale.
+RSI (Relative Strength Index): controlla se il mercato è in condizioni di ipercomprato o ipervenduto.
+Se il MACD segnala un cambiamento e l'RSI indica condizioni di ipervenduto, il bot suggerirà di comprare, mentre in caso di ipercomprato suggerirà di vendere.
+
+Funzione execute_trade(trade_rec_type, trading_ticker):
+def execute_trade(trade_rec_type, trading_ticker):
+    # Executes the trade based on the recommendation and current price
+    ...
+Esegue un ordine di acquisto o vendita sull'exchange in base alla raccomandazione di trading ricevuta.
+Compra una certa quantità di criptovaluta quando viene ricevuto un segnale di "BUY", o vende se il segnale è "SELL".
+
+Funzione run_bot_for_ticker(ccxt_ticker, trading_ticker):
+def run_bot_for_ticker(ccxt_ticker, trading_ticker):
+    # Main loop for fetching data, getting trading recommendations, and executing trades
+    ...
+
+Il bot funziona in un ciclo infinito:
+Raccoglie dati di mercato (OHLCV).
+Applica gli indicatori tecnici per determinare se comprare o vendere.
+Se riceve un segnale, esegue un'operazione (acquisto o vendita).
+
+Considerazioni sullo script:
+Strategia basata sugli indicatori: Il bot fa affidamento su una strategia semplice, utilizzando il MACD per identificare i cambi di tendenza e l'RSI per confermare se è il momento giusto per comprare o vendere.
+Error handling: Non gestisce in modo dettagliato errori o eccezioni, potrebbe essere utile aggiungere più logging o strategie di recupero.
+Ottimizzazione: Potrebbe essere migliorato con logiche più complesse di gestione del rischio e analisi delle performance storiche (backtesting).
+Sicurezza: L'API key viene letta da un file non protetto, sarebbe preferibile gestirla con maggiore sicurezza (es. variabili d'ambiente).
+Nel complesso, lo script è una buona base per un bot di trading automatico, ma potrebbe essere ottimizzato per strategie più sofisticate e per una migliore gestione degli errori.
