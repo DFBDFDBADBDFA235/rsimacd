@@ -1,0 +1,16 @@
+#verificare le condizioni sotto copiate da preferito folder git
+
+# Ignora i file di sistema Mac
+.DS_store
+
+# Ignora la cartella node_modules
+node_modules
+
+# Ignora tutti i file .txt
+*.txt
+
+# Ignora i file collegati alle chiavi API
+.env
+
+# Ignora i file SASS di configurazione
+.sass-cache
