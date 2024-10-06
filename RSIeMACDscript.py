@@ -15,14 +15,13 @@ RSI_PERIOD = 14
 INVESTMENT_AMOUNT_PER_TRADE = 10
 HOLDING_QUANTITY = 0
 
-CCXT_TICKER_NAME = 'FET/USDT'
-TRADING_TICKER_NAME = 'FET/USDT'
+CCXT_TICKER_NAME = 'BTC/USDT'
+TRADING_TICKER_NAME = 'BTC/USDT'
 exchange = ccxt.binance({
-# meglio open?
-    'apiKey': open(' ', 'r').read()
-    'secret': ' ',
+# testare log in da file e poi con variabili di ambiente
+    'apiKey': 'vutpiw3Cej7AYY1q0XOBduGTZr4qD2E3piHzRwoteIM0a7UEjpYVuA7afeMqRFfv',
+    'secret': 'xhQ4L709dTIOI7CT54K7mUa1KoQHiT7vK9zl9CAJqyPJZ1DZgWKBoL2LyRKCdjWQ',
     'enableRateLimit': True,
-# options for future: 'options': {'defaultType': 'future'}
 })
 
 
