@@ -1,67 +1,89 @@
-Questo script implementa un bot di trading automatico che utilizza dati di mercato in tempo reale per prendere decisioni di acquisto o vendita sulla base di indicatori tecnici. Qui di seguito un commento dettagliato del codice:
+Il codice che hai condiviso rappresenta un **bot di trading automatico** che utilizza la libreria **ccxt** per interfacciarsi con l'exchange Binance e scambiare la criptovaluta **BTC/USDT**. Il bot usa indicatori tecnici come **MACD** e **RSI** per prendere decisioni di acquisto o vendita, e quindi esegue ordini sull'exchange.
 
-Importazione delle librerie:
-import time
-from datetime import datetime
-import ccxt as ccxt
-import pandas as pd
-import numpy as np
-import talib
+Di seguito una spiegazione più dettagliata delle varie sezioni del codice:
 
-ccxt: libreria per interagire con le API degli exchange di criptovalute.
-pandas: utilizzata per la gestione dei dati strutturati.
-numpy: libreria per calcoli numerici.
-talib: libreria per calcolare gli indicatori tecnici, come il MACD e RSI, usati comunemente nel trading.
+### 1. **Impostazioni e inizializzazione delle variabili**
+```python
+CANDLE_DURATION_IN_MIN = 1  # Durata della candela in minuti
+RSI_OVERSOLD = 25  # Livello di RSI considerato come ipervenduto
+RSI_OVERBOUGHT = 75  # Livello di RSI considerato come ipercomprato
+RSI_PERIOD = 14  # Periodo del calcolo dell'RSI
+INVESTMENT_AMOUNT_PER_TRADE = 10  # Importo dell'investimento per ogni trade
+HOLDING_QUANTITY = 0  # Quantità di asset detenuti attualmente
+```
 
-Inizializzazione delle variabili:
-CANDLE_DURATION_IN_MIN = 1
-RSI_OVERSOLD = 25
-RSI_OVERBOUGHT = 75
-RSI_PERIOD = 14
-INVESTMENT_AMOUNT_PER_TRADE = 10
-HOLDING_QUANTITY = 0
-CCXT_TICKER_NAME = 'BTC/EUR'
-TRADING_TICKER_NAME = 'BTC/EUR'
-Definisce i parametri di trading: durata delle candele in minuti, soglie per RSI (ipercomprato/ipersvenduto), quantità di investimento per ogni trade, e la coppia di valute su cui operare (BTC/EUR).
+- Queste variabili definiscono la durata della candela (1 minuto), i livelli di **RSI** per prendere decisioni, e l'importo per ogni trade (10 unità di valuta base).
 
-Connessione all'API dell'exchange:
-exchange = ccxt.bitpanda({
-    'apiKey': open('apikey', 'r').read()
+### 2. **Connessione all'exchange Binance**
+```python
+exchange = ccxt.binance({
+    'apiKey': 'vutpiw3Cej7AYY1q0XOBduGTZr4qD2E3piHzRwoteIM0a7UEjpYVuA7afeMqRFfv',
+    'secret': 'xhQ4L709dTIOI7CT54K7mUa1KoQHiT7vK9zl9CAJqyPJZ1DZgWKBoL2LyRKCdjWQ',
+    'enableRateLimit': True,
 })
-Usa la libreria ccxt per connettersi all'exchange Bitpanda, leggendo l'API key da un file.
+```
 
-Funzione fetch_data(ticker):
+- Qui il bot si autentica all'exchange Binance utilizzando una chiave API e un secret. **Nota importante**: Le chiavi API **non dovrebbero essere esposte pubblicamente** nel codice, è consigliato gestirle tramite variabili d'ambiente o file separati.
+
+### 3. **Funzione `fetch_data`: recuperare i dati di mercato**
+```python
 def fetch_data(ticker):
-    # fetching the historical candlestick data (OHLCV) from the exchange
-    ...
-Raccoglie i dati OHLCV (Open, High, Low, Close, Volume) dalla coppia di valute scelta. Converte i dati in un DataFrame di pandas e aggiunge una colonna con il timestamp convertito.
+    try:
+        bars = exchange.fetch_ohlcv(ticker, timeframe=f'{CANDLE_DURATION_IN_MIN}m', limit=100)
+    except:
+        print(f"Error in fetching data from the exchange:{ticker}")
+```
 
-Funzione get_trade_recommendation(ticker_df):
+- Questa funzione recupera i dati OHLCV (Open, High, Low, Close, Volume) per il ticker specificato (in questo caso **BTC/USDT**). La durata della candela è di **1 minuto** e vengono recuperati i **100 dati più recenti**.
+
+### 4. **Calcolo degli indicatori tecnici (MACD e RSI)**
+```python
 def get_trade_recommendation(ticker_df):
-    # Calculate MACD and RSI and determine buy or sell signals
-    ...
-Calcola due indicatori tecnici:
+    macd, signal, hist = talib.MACD(ticker_df['close'], fastperiod=12, slowperiod=26, signalperiod=9)
+    rsi = talib.RSI(ticker_df['close'], timeperiod=14)
+```
 
-MACD (Moving Average Convergence Divergence): individua i punti di crossover tra la linea MACD e il segnale.
-RSI (Relative Strength Index): controlla se il mercato è in condizioni di ipercomprato o ipervenduto.
-Se il MACD segnala un cambiamento e l'RSI indica condizioni di ipervenduto, il bot suggerirà di comprare, mentre in caso di ipercomprato suggerirà di vendere.
+- Il bot utilizza la libreria **TA-Lib** per calcolare l'indicatore **MACD** e il valore **RSI**.
+- Se il MACD cambia da negativo a positivo (o viceversa), viene generato un segnale di **BUY** o **SELL**.
+- Il valore dell'RSI è utilizzato per confermare il segnale: se l'RSI è inferiore al livello di ipervenduto e il segnale MACD è "BUY", viene eseguito un ordine di acquisto; se l'RSI è sopra il livello di ipercomprato e il segnale MACD è "SELL", viene eseguito un ordine di vendita.
 
-Funzione execute_trade(trade_rec_type, trading_ticker):
+### 5. **Esecuzione del trade**
+```python
 def execute_trade(trade_rec_type, trading_ticker):
-    # Executes the trade based on the recommendation and current price
-    ...
-Esegue un ordine di acquisto o vendita sull'exchange in base alla raccomandazione di trading ricevuta.
-Compra una certa quantità di criptovaluta quando viene ricevuto un segnale di "BUY", o vende se il segnale è "SELL".
+    side_value = 'buy' if trade_rec_type == "BUY" else 'sell'
+    try:
+        order_response = exchange.create_limit_order(trading_ticker, side_value, scrip_quantity, current_price)
+        print(f'ORDER PLACED. RESPONSE: {order_response}')
+    except:
+        print(f"\nALERT!!! UNABLE TO COMPLETE THE ORDER.")
+```
 
-Funzione run_bot_for_ticker(ccxt_ticker, trading_ticker):
+- Questa funzione esegue effettivamente il trade, piazzando un **ordine limite** sull'exchange Binance. Se il segnale di trading è "BUY", viene piazzato un ordine di acquisto, altrimenti un ordine di vendita.
+
+### 6. **Ciclo continuo del bot**
+```python
 def run_bot_for_ticker(ccxt_ticker, trading_ticker):
-    # Main loop for fetching data, getting trading recommendations, and executing trades
-    ...
+    while 1:
+        ticker_data = fetch_data(ccxt_ticker)
+        trade_rec_type = get_trade_recommendation(ticker_data)
+        if (trade_rec_type == 'BUY' and not currently_holding) or (trade_rec_type == 'SELL' and currently_holding):
+            trade_successful = execute_trade(trade_rec_type, trading_ticker)
+        time.sleep(CANDLE_DURATION_IN_MIN * 60)
+```
 
-Il bot funziona in un ciclo infinito:
-Raccoglie dati di mercato (OHLCV).
-Applica gli indicatori tecnici per determinare se comprare o vendere.
-Se riceve un segnale, esegue un'operazione (acquisto o vendita).
+- Il bot esegue ciclicamente i seguenti passi:
+  1. Recupera i dati di mercato per il ticker.
+  2. Calcola gli indicatori tecnici e determina se comprare o vendere.
+  3. Se il segnale è valido, piazza un ordine.
+  4. Aspetta per la durata della candela (in questo caso 1 minuto) prima di ripetere il ciclo.
+
+---
+
+### **Raccomandazioni di sicurezza**
+- **Gestione sicura delle chiavi API**: Come detto prima, è fondamentale **non includere** le chiavi API direttamente nel codice sorgente. Usa variabili d'ambiente o file di configurazione esterni e protetti.
+- **Test su ambiente simulato**: Prima di eseguire il bot con denaro reale, eseguilo su un **account di test** o usa una modalità paper trading.
+
+---
 
 Considerazioni sullo script:
 Strategia basata sugli indicatori: Il bot fa affidamento su una strategia semplice, utilizzando il MACD per identificare i cambi di tendenza e l'RSI per confermare se è il momento giusto per comprare o vendere.
