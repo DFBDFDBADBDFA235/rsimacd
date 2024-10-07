@@ -124,3 +124,8 @@ Ottimizzazione del ciclo di polling: Attualmente il bot attende un intervallo fi
 Miglioramenti del controllo delle posizioni: Dovrebbe essere aggiunta una logica più sofisticata per la gestione delle posizioni. Ad esempio, se viene ricevuto un segnale di "BUY" e il prezzo aumenta considerevolmente, potrebbe essere implementata una logica di trailing stop o take profit.
 
 Logging e monitoraggio: Aggiungere logging dettagliato su ogni passaggio potrebbe essere utile per monitorare il funzionamento del bot e facilitare il debug in caso di problemi.
+
+testare le regressioni - customizzare variabili - configurare le apis da file e ambiente
+
+Si potrebbero inserire limiti di buy (es. orario) e gli SL e i TP
+
