@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import time
 from datetime import datetime
-
+import os
 import ccxt as ccxt
 import pandas as pd
 import numpy as np
@@ -18,10 +18,14 @@ HOLDING_QUANTITY = 0
 
 CCXT_TICKER_NAME = 'BTC/USDT'
 TRADING_TICKER_NAME = 'BTC/USDT'
+
+api_key = os.getenv('BINANCE_API_KEY')
+api_secret = os.getenv('BINANCE_SECRET')
+
 exchange = ccxt.binance({
 # testare log in da file e poi con variabili di ambiente
-    'apiKey': 'vutpiw3Cej7AYY1q0XOBduGTZr4qD2E3piHzRwoteIM0a7UEjpYVuA7afeMqRFfv',
-    'secret': 'xhQ4L709dTIOI7CT54K7mUa1KoQHiT7vK9zl9CAJqyPJZ1DZgWKBoL2LyRKCdjWQ',
+    'apiKey': api_key,
+    'secret': api_secret,
     'enableRateLimit': True,
     'options': {
         'adjustForTimeDifference': True,  # This will adjust for any time differences automatically
