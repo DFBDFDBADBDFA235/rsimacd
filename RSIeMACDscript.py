@@ -19,19 +19,24 @@ HOLDING_QUANTITY = 0
 CCXT_TICKER_NAME = 'BTC/USDT'
 TRADING_TICKER_NAME = 'BTC/USDT'
 
-api_key = os.getenv('BINANCE_API_KEY')
-api_secret = os.getenv('BINANCE_SECRET')
-
-exchange = ccxt.binance({
-# testare log in da file e poi con variabili di ambiente
-    'apiKey': api_key,
-    'secret': api_secret,
-    'enableRateLimit': True,
-    'options': {
-        'adjustForTimeDifference': True,  # This will adjust for any time differences automatically
-    }
-})
-
+try:
+    exchange = ccxt.binance({
+        'apiKey': os.environ.get('BINANCE_API_KEY'),
+        'secret': os.environ.get('BINANCE_SECRET')
+        'enableRateLimit': True,
+        'options': {
+            'adjustForTimeDifference': True,  # This will adjust for any time differences automatically
+    })
+    
+    # Tenta di accedere alle informazioni del conto
+    balance = exchange.fetch_balance()
+    print("Connessione riuscita!")
+    print(f"Saldo disponibile in USDT: {balance['USDT']['free']}")
+    
+except ccxt.AuthenticationError:
+    print("Errore di autenticazione. Verifica le tue credenziali API.")
+except Exception as e:
+    print(f"Si è verificato un errore: {str(e)}")
 
 # STEP 1: FETCH THE DATA
 def fetch_data(ticker):
