@@ -1,8 +1,6 @@
 Considerazioni sullo script:
-Strategia basata sugli indicatori: Il bot fa affidamento su una strategia semplice, utilizzando il MACD per identificare i cambi di tendenza e l'RSI per confermare se è il momento giusto per comprare o vendere.
 Error handling: Non gestisce in modo dettagliato errori o eccezioni, potrebbe essere utile aggiungere più logging o strategie di recupero.
 Ottimizzazione: Potrebbe essere migliorato con logiche più complesse di gestione del rischio e analisi delle performance storiche (backtesting).
-Sicurezza: L'API key viene letta da un file non protetto, sarebbe preferibile gestirla con maggiore sicurezza (es. variabili d'ambiente).
 
 Approfondiamo le funzioni presenti nello script, evidenziando il loro funzionamento e i miglioramenti che potrebbero essere apportati.
 
