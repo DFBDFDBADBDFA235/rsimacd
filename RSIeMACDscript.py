@@ -23,6 +23,9 @@ exchange = ccxt.binance({
     'apiKey': 'vutpiw3Cej7AYY1q0XOBduGTZr4qD2E3piHzRwoteIM0a7UEjpYVuA7afeMqRFfv',
     'secret': 'xhQ4L709dTIOI7CT54K7mUa1KoQHiT7vK9zl9CAJqyPJZ1DZgWKBoL2LyRKCdjWQ',
     'enableRateLimit': True,
+    'options': {
+        'adjustForTimeDifference': True,  # This will adjust for any time differences automatically
+    }
 })
 
 
