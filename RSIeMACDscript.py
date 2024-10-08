@@ -20,10 +20,15 @@ HOLDING_QUANTITY = 0
 CCXT_TICKER_NAME = 'BTC/USDT'
 TRADING_TICKER_NAME = 'BTC/USDT'
 
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler("trading_bot.log"),
+                              logging.StreamHandler()])
+
 try:
     exchange = ccxt.binance({
         'apiKey': os.environ.get('BINANCE_API_KEY'),
-        'secret': os.environ.get('BINANCE_SECRET')
+        'secret': os.environ.get('BINANCE_SECRET'),
         'enableRateLimit': True,
         'options': {
             'adjustForTimeDifference': True,  # This will adjust for any time differences automatically
@@ -133,31 +138,50 @@ def execute_trade(trade_rec_type, trading_ticker):
 
 def run_bot_for_ticker(ccxt_ticker, trading_ticker):
     currently_holding = False
+    retry_count = 0
+    max_retries = 5
+    backoff_factor = 1.5
+
     while True:
         try:
-            # STEP 1: FETCH THE DATA
-            ticker_data = fetch_data(ccxt_ticker)
-            if ticker_data is not None:
-                # STEP 2: COMPUTE TECHNICAL INDICATORS & APPLY THE TRADING STRATEGY
-                trade_rec_type = get_trade_recommendation(ticker_data)
-                logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")}  TRADING RECOMMENDATION: {trade_rec_type}')
+            # STEP 1: FETCH THE DATA WITH BACKOFF RETRY LOGIC
+            while retry_count < max_retries:
+                try:
+                    ticker_data = fetch_data(ccxt_ticker)
+                    if ticker_data is not None:
+                        retry_count = 0  # Reset retry count if successful
+                        break  # Break if data is fetched successfully
+                except Exception as e:
+                    retry_count += 1
+                    wait_time = backoff_factor ** retry_count
+                    logging.error(f"Failed to fetch data. Retry {retry_count}/{max_retries}. Waiting {wait_time} seconds.")
+                    time.sleep(wait_time)
 
-                # STEP 3: EXECUTE THE TRADE
-                if (trade_rec_type == 'BUY' and not currently_holding) or \
-                   (trade_rec_type == 'SELL' and currently_holding):
-                    logging.info(f'Placing {trade_rec_type} order')
-                    trade_successful = execute_trade(trade_rec_type, trading_ticker)
-                    currently_holding = not currently_holding if trade_successful else currently_holding
+            if ticker_data is None:
+                logging.error(f"Exceeded max retries ({max_retries}) for fetching ticker data. Retrying in 10 seconds.")
+                time.sleep(10)
+                continue
 
-                # Sleep until the next candle duration
-                time.sleep(CANDLE_DURATION_IN_MIN * 60)
-            else:
-                logging.warning(f'Unable to fetch ticker data for {ccxt_ticker}. Retrying in 5 seconds.')
-                time.sleep(5)
+            # STEP 2: COMPUTE TECHNICAL INDICATORS & APPLY THE TRADING STRATEGY
+            trade_rec_type = get_trade_recommendation(ticker_data)
+            logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")}  TRADING RECOMMENDATION: {trade_rec_type}')
+
+            # STEP 3: EXECUTE THE TRADE
+            if (trade_rec_type == 'BUY' and not currently_holding) or \
+               (trade_rec_type == 'SELL' and currently_holding):
+                logging.info(f'Placing {trade_rec_type} order')
+                trade_successful = execute_trade(trade_rec_type, trading_ticker)
+                currently_holding = not currently_holding if trade_successful else currently_holding
+
+            # Sleep until the next candle duration
+            time.sleep(CANDLE_DURATION_IN_MIN * 60)
 
         except Exception as e:
             logging.error(f"Error in bot execution: {str(e)}")
             time.sleep(10)  # Wait before retrying to avoid hammering the API
 
+ try:
+       run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME)
+   except KeyboardInterrupt:
+       logging.info("Bot stopped manually.")
 
-run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME)
