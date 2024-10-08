@@ -1,7 +1,0 @@
-test ip poi 
-test time settings sincro
-Error handling: Non gestisce in modo dettagliato errori o eccezioni, potrebbe essere utile aggiungere più logging o strategie di recupero.
-Ottimizzazione: Potrebbe essere migliorato con logiche più complesse di gestione del rischio e analisi delle performance storiche (backtesting).
-testare le regressioni - customizzare variabili - configurare le apis da file e ambiente
-Si potrebbero inserire limiti di buy (es. orario) e gli SL e i TP
-
