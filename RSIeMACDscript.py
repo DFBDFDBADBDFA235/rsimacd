@@ -2,13 +2,11 @@
 import time
 from datetime import datetime
 import os
-import ccxt as ccxt
+import ccxt
 import pandas as pd
 import numpy as np
 import talib
 import logging
-import socket  # for network-related errors
-import requests.exceptions  # assuming you might be using requests or other libraries for API
 import signal
 
 # Initialize Variables
@@ -35,22 +33,30 @@ try:
         'enableRateLimit': True,
         'options': {
             'adjustForTimeDifference': True,  # This will adjust for any time differences automatically
+        }
     })
-    
+
     # Tenta di accedere alle informazioni del conto
     balance = exchange.fetch_balance()
     print("Connessione riuscita!")
     print(f"Saldo disponibile in USDT: {balance['USDT']['free']}")
-    
+
+    # Inizializza HOLDING_QUANTITY basandosi sul saldo reale
+    asset = TRADING_TICKER_NAME.split('/')[0]  # 'BTC' in questo caso
+    HOLDING_QUANTITY = balance['total'].get(asset, 0)
+    logging.info(f"Inizializzazione HOLDING_QUANTITY: {HOLDING_QUANTITY} {asset}")
+
 except ccxt.AuthenticationError:
-    print("Errore di autenticazione. Verifica le tue credenziali API.")
+    logging.error("Errore di autenticazione. Verifica le tue credenziali API.")
+    exit(1)
 except Exception as e:
-    print(f"Si è verificato un errore: {str(e)}")
+    logging.error(f"Si è verificato un errore durante la connessione: {str(e)}")
+    exit(1)
 
 # STEP 1: FETCH THE DATA
 def fetch_data(ticker):
     global exchange
-    bars, ticker_df = None, None
+    ticker_df = None
     try:
         # Fetch OHLCV data
         bars = exchange.fetch_ohlcv(ticker, timeframe=f'{CANDLE_DURATION_IN_MIN}m', limit=100)
@@ -73,24 +79,16 @@ def fetch_data(ticker):
             logging.warning(f"Missing data detected in DataFrame for {ticker}")
 
             # Opzioni di gestione dei dati mancanti
-            # 1. Rimuovi le righe con valori NaN
-            ticker_df = ticker_df.dropna()
-            
-            # 2. Oppure, riempi i NaN con un valore specifico (es. 0 o la media della colonna)
-            # ticker_df.fillna(0, inplace=True)  # Sostituisce NaN con 0
-            
-            # 3. Oppure interpolare i dati mancanti
-            # ticker_df.interpolate(method='linear', inplace=True)
+            ticker_df = ticker_df.dropna()  # Rimuove le righe con NaN
 
-    except ConnectionError as ce:
+    except ccxt.NetworkError as ce:
         logging.error(f"Connection error while fetching data for {ticker}: {str(ce)}")
-        
+    except ccxt.ExchangeError as ee:
+        logging.error(f"Exchange error while fetching data for {ticker}: {str(ee)}")
     except TimeoutError as te:
         logging.error(f"Timeout error while fetching data for {ticker}: {str(te)}")
-        
     except ValueError as ve:
         logging.error(f"Value error while processing data for {ticker}: {str(ve)}")
-        
     except Exception as e:
         logging.error(f"An unexpected error occurred while fetching data for {ticker}: {str(e)}")
 
@@ -119,7 +117,7 @@ def get_trade_recommendation(ticker_df):
 
     # Se viene generato un segnale MACD, controlla l'RSI per confermare il segnale
     if macd_result != 'WAIT':
-        rsi = talib.RSI(ticker_df['close'], timeperiod=14)
+        rsi = talib.RSI(ticker_df['close'], timeperiod=RSI_PERIOD)
         last_rsi = rsi.iloc[-1]
 
         if not np.isnan(last_rsi):
@@ -134,9 +132,10 @@ def get_trade_recommendation(ticker_df):
 def check_liquidity(trading_ticker, scrip_quantity):
     """Controlla se ci sono sufficienti fondi per vendere."""
     try:
-        # Fetch il saldo corrente
-        account_balance = exchange.fetch_balance()
-        available_balance = account_balance['total'][trading_ticker.split('/')[0]]  # Assumendo che il ticker sia nel formato 'BTC/USD'
+        # Sincronizza il bilancio prima di controllare la liquidità
+        sync_holdings()
+        asset = trading_ticker.split('/')[0]  # 'BTC' in questo caso
+        available_balance = HOLDING_QUANTITY  # Poiché abbiamo sincronizzato
         return available_balance >= scrip_quantity
     except Exception as e:
         logging.error(f"Error fetching balance for liquidity check: {str(e)}")
@@ -144,16 +143,14 @@ def check_liquidity(trading_ticker, scrip_quantity):
 
 def validate_trade_params(trade_rec_type, scrip_quantity):
     """Controlla se le condizioni per l'operazione sono valide."""
+    # Sincronizza il bilancio prima di validare
+    sync_holdings()
     if trade_rec_type == "SELL" and scrip_quantity > HOLDING_QUANTITY:
         logging.error("Tentativo di vendere più di quanto si possiede.")
         return False
     return True
 
 # STEP 4: EXECUTE THE TRADE (both buy and sell)
-import logging
-from datetime import datetime
-import time
-
 def execute_trade(trade_rec_type, trading_ticker):
     global exchange, HOLDING_QUANTITY, INVESTMENT_AMOUNT_PER_TRADE
     order_placed = False
@@ -163,15 +160,15 @@ def execute_trade(trade_rec_type, trading_ticker):
         # Fetch current ticker price
         ticker_request = exchange.fetch_ticker(trading_ticker)
         if ticker_request is not None:
-            current_price = float(ticker_request['info']['last_price'])
+            current_price = float(ticker_request['last'])  # Utilizza 'last' per il prezzo più recente
 
             # Calculate the quantity for the order
             if trade_rec_type == "BUY":
                 scrip_quantity = round(INVESTMENT_AMOUNT_PER_TRADE / current_price, 5)
             else:
-                # For sell orders, use the quantity being held
+                # Per gli ordini di vendita, usa la quantità posseduta
                 scrip_quantity = HOLDING_QUANTITY
-            
+
             # Ensure not selling more than held
             if trade_rec_type == "SELL":
                 if scrip_quantity > HOLDING_QUANTITY:
@@ -205,20 +202,34 @@ def execute_trade(trade_rec_type, trading_ticker):
                 else:
                     HOLDING_QUANTITY -= scrip_quantity  # Subtract the sold quantity
 
+                # Sincronizza immediatamente il bilancio dopo il trade
+                sync_holdings()
+
                 order_placed = True
             else:
                 logging.error("Order response was empty or invalid.")
         else:
             logging.error(f"Failed to fetch ticker data for {trading_ticker}.")
-    
+
     except Exception as e:
         logging.error(f"ALERT!!! UNABLE TO COMPLETE THE ORDER. ERROR: {str(e)}")
     
     return order_placed
 
-#run bot managing errors and shutting down with signal handling and file monitoring
+# Funzione per sincronizzare il saldo
+def sync_holdings():
+    global HOLDING_QUANTITY
+    try:
+        balance = exchange.fetch_balance()
+        asset = TRADING_TICKER_NAME.split('/')[0]  # 'BTC' in questo caso
+        real_holdings = balance['total'].get(asset, 0)
+        if real_holdings != HOLDING_QUANTITY:
+            logging.info(f"Sincronizzazione HOLDING_QUANTITY: {HOLDING_QUANTITY} -> {real_holdings}")
+            HOLDING_QUANTITY = real_holdings
+    except Exception as e:
+        logging.error(f"Error during holdings synchronization: {str(e)}")
 
-# Global variable to control bot execution
+# Funzioni per gestire il shutdown
 shutdown_requested = False
 
 def signal_handler(sig, frame):
@@ -234,12 +245,13 @@ def check_shutdown_file(file_path):
 # Global variable to track the timestamp of the last processed candle
 last_candle_time = None
 
-def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path):
+def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path='shutdown.txt'):
     global shutdown_requested, last_candle_time
     currently_holding = False
 
     # Register the signal handler for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     while not shutdown_requested:
         try:
@@ -300,8 +312,9 @@ def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path):
     # Cleanup and exit
     logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Bot has shut down safely.')
 
- try:
-       run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME)
-   except KeyboardInterrupt:
-       logging.info("Bot stopped manually.")
-
+# Avvio del bot
+if __name__ == "__main__":
+    try:
+        run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME)
+    except KeyboardInterrupt:
+        logging.info("Bot stopped manually.")
