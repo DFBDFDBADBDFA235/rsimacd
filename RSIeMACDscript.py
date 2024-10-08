@@ -9,6 +9,7 @@ import talib
 import logging
 import socket  # for network-related errors
 import requests.exceptions  # assuming you might be using requests or other libraries for API
+import signal
 
 # Initialize Variables
 CANDLE_DURATION_IN_MIN = 1
@@ -141,8 +142,19 @@ def check_liquidity(trading_ticker, scrip_quantity):
         logging.error(f"Error fetching balance for liquidity check: {str(e)}")
         return False
 
+def validate_trade_params(trade_rec_type, scrip_quantity):
+    """Controlla se le condizioni per l'operazione sono valide."""
+    if trade_rec_type == "SELL" and scrip_quantity > HOLDING_QUANTITY:
+        logging.error("Tentativo di vendere più di quanto si possiede.")
+        return False
+    return True
+
 # STEP 4: EXECUTE THE TRADE (both buy and sell)
-def execute_trade(trade_rec_type, trading_ticker): 
+import logging
+from datetime import datetime
+import time
+
+def execute_trade(trade_rec_type, trading_ticker):
     global exchange, HOLDING_QUANTITY, INVESTMENT_AMOUNT_PER_TRADE
     order_placed = False
     side_value = 'buy' if trade_rec_type == "BUY" else 'sell'
@@ -153,39 +165,45 @@ def execute_trade(trade_rec_type, trading_ticker):
         if ticker_request is not None:
             current_price = float(ticker_request['info']['last_price'])
 
-            # Calcola la quantità di scrip per l'ordine
+            # Calculate the quantity for the order
             if trade_rec_type == "BUY":
                 scrip_quantity = round(INVESTMENT_AMOUNT_PER_TRADE / current_price, 5)
             else:
-                # Per le vendite, utilizza la quantità detenuta
+                # For sell orders, use the quantity being held
                 scrip_quantity = HOLDING_QUANTITY
             
-            # Assicurati di non vendere più di quanto si possiede
+            # Ensure not selling more than held
             if trade_rec_type == "SELL":
                 if scrip_quantity > HOLDING_QUANTITY:
-                    logging.error("Tentativo di vendere più di quanto si possiede.")
-                    return order_placed  # Esci senza effettuare l'ordine
+                    logging.error("Attempting to sell more than held.")
+                    return order_placed  # Exit without placing the order
                 
-                # Controlla la liquidità
+                # Check for liquidity
                 if not check_liquidity(trading_ticker, scrip_quantity):
-                    logging.error("Fondi insufficienti per completare la vendita.")
-                    return order_placed  # Esci senza effettuare l'ordine
+                    logging.error("Insufficient funds to complete the sell order.")
+                    return order_placed  # Exit without placing the order
 
-            # Log dei dettagli dell'ordine prima di piazzarlo
+            # Log the order details before placing it
             order_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
             epoch_time = int(time.time() * 1000)
-            logging.info(f"PLACING ORDER {order_time}: {trading_ticker}, {side_value}, {current_price}, {scrip_quantity}, {epoch_time}")
+            logging.info(f"PLACING ORDER {order_time}: Ticker: {trading_ticker}, Side: {side_value}, "
+                         f"Price: {current_price}, Quantity: {scrip_quantity}, Timestamp: {epoch_time}")
             
-            # Effettua l'ordine sull'exchange
+            # Place the order on the exchange
             order_response = exchange.create_limit_order(trading_ticker, side_value, scrip_quantity, current_price)
             
-            # Log della risposta e aggiornamento della quantità detenuta
+            # Log the response and update the held quantity
             if order_response:
-                logging.info(f'ORDER PLACED. RESPONSE: {order_response}')
+                logging.info(f'ORDER PLACED SUCCESSFULLY. RESPONSE: {order_response}')
+                # Log trade details for executed trades
+                trade_execution_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+                logging.info(f"TRADE EXECUTED {trade_execution_time}: {trade_rec_type} {scrip_quantity} "
+                             f"at {current_price} for {trading_ticker}")
+                
                 if trade_rec_type == "BUY":
-                    HOLDING_QUANTITY += scrip_quantity  # Aggiungi la quantità acquistata
-                else:  # Se è una vendita
-                    HOLDING_QUANTITY -= scrip_quantity  # Sottrai la quantità venduta
+                    HOLDING_QUANTITY += scrip_quantity  # Add the purchased quantity
+                else:
+                    HOLDING_QUANTITY -= scrip_quantity  # Subtract the sold quantity
 
                 order_placed = True
             else:
@@ -198,50 +216,87 @@ def execute_trade(trade_rec_type, trading_ticker):
     
     return order_placed
 
+#run bot managing errors and shutting down with signal handling and file monitoring
 
-def run_bot_for_ticker(ccxt_ticker, trading_ticker):
+# Global variable to control bot execution
+shutdown_requested = False
+
+def signal_handler(sig, frame):
+    """Handle signals to initiate a graceful shutdown."""
+    global shutdown_requested
+    logging.info("Shutdown signal received. Initiating shutdown...")
+    shutdown_requested = True
+
+def check_shutdown_file(file_path):
+    """Check if a specific shutdown file exists."""
+    return os.path.isfile(file_path)
+
+def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path):
+    global shutdown_requested
     currently_holding = False
-    retry_count = 0
-    max_retries = 5
-    backoff_factor = 1.5
 
-    while True:
+    # Register the signal handler for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+
+    while not shutdown_requested:
         try:
-            # STEP 1: FETCH THE DATA WITH BACKOFF RETRY LOGIC
-            while retry_count < max_retries:
-                try:
-                    ticker_data = fetch_data(ccxt_ticker)
-                    if ticker_data is not None:
-                        retry_count = 0  # Reset retry count if successful
-                        break  # Break if data is fetched successfully
-                except Exception as e:
-                    retry_count += 1
-                    wait_time = backoff_factor ** retry_count
-                    logging.error(f"Failed to fetch data. Retry {retry_count}/{max_retries}. Waiting {wait_time} seconds.")
-                    time.sleep(wait_time)
+            # STEP 1: FETCH THE DATA
+            ticker_data = fetch_data(ccxt_ticker)
+            if ticker_data is not None:
+                # Log the current price fetched from the ticker
+                current_price = ticker_data['info']['last_price']
+                logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Ticker: {ccxt_ticker}, Current Price: {current_price}')
 
-            if ticker_data is None:
-                logging.error(f"Exceeded max retries ({max_retries}) for fetching ticker data. Retrying in 10 seconds.")
-                time.sleep(10)
-                continue
+                # STEP 2: COMPUTE TECHNICAL INDICATORS & APPLY THE TRADING STRATEGY
+                trade_rec_type = get_trade_recommendation(ticker_data)
+                logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - TRADING RECOMMENDATION: {trade_rec_type}')
 
-            # STEP 2: COMPUTE TECHNICAL INDICATORS & APPLY THE TRADING STRATEGY
-            trade_rec_type = get_trade_recommendation(ticker_data)
-            logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")}  TRADING RECOMMENDATION: {trade_rec_type}')
+                # STEP 3: EXECUTE THE TRADE
+                if (trade_rec_type == 'BUY' and not currently_holding) or \
+                   (trade_rec_type == 'SELL' and currently_holding):
+                    
+                    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Placing {trade_rec_type} order for {trading_ticker}')
 
-            # STEP 3: EXECUTE THE TRADE
-            if (trade_rec_type == 'BUY' and not currently_holding) or \
-               (trade_rec_type == 'SELL' and currently_holding):
-                logging.info(f'Placing {trade_rec_type} order')
-                trade_successful = execute_trade(trade_rec_type, trading_ticker)
-                currently_holding = not currently_holding if trade_successful else currently_holding
+                    # Execute the trade and retrieve trade details (amount, price)
+                    trade_successful = execute_trade(trade_rec_type, trading_ticker)
 
-            # Sleep until the next candle duration
-            time.sleep(CANDLE_DURATION_IN_MIN * 60)
+                    if trade_successful:
+                        logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Trade {trade_rec_type} for {trading_ticker} successful.')
+                        
+                        # Assuming `execute_trade` returns the amount and price as part of the response
+                        trade_amount = trade_successful.get('amount')
+                        trade_price = trade_successful.get('price')
+                        
+                        # Log detailed trade info
+                        logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Executed {trade_rec_type} order: '
+                                     f'Amount: {trade_amount}, Price: {trade_price}, Ticker: {trading_ticker}')
+
+                        # Update the currently holding status
+                        currently_holding = not currently_holding
+                    else:
+                        logging.error(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Failed to execute {trade_rec_type} order for {trading_ticker}')
+                    
+                # Sleep until the next candle duration
+                time.sleep(CANDLE_DURATION_IN_MIN * 60)
+
+            else:
+                logging.warning(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Unable to fetch ticker data for {ccxt_ticker}. Retrying in 5 seconds.')
+                time.sleep(5)
+
+            # Check for shutdown file
+            if check_shutdown_file(shutdown_file_path):
+                logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Shutdown file detected. Initiating shutdown...')
+                shutdown_requested = True
 
         except Exception as e:
-            logging.error(f"Error in bot execution: {str(e)}")
+            logging.error(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Error in bot execution: {str(e)}")
             time.sleep(10)  # Wait before retrying to avoid hammering the API
+
+    # Cleanup and exit
+    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Bot has shut down safely.')
+
+
+
 
  try:
        run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME)
