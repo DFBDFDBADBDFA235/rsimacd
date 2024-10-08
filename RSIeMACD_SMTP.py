@@ -96,18 +96,6 @@ def handle_error(error_message, critical=False):
         logger.info("Errore non critico, il bot riproverà a ripartire in 30 secondi...")
         time.sleep(30)  # Attende 30 secondi prima di riprovare
 
-# Funzione per inviare shutdown
-def shutdown_handler(sig, frame):
-    global shutdown_requested
-    logger.info("Segnale di shutdown ricevuto. Avvio della chiusura...")
-    shutdown_requested = True
-
-# Funzione per inviare shutdown
-def shutdown_bot():
-    logger.info("Chiusura del bot in corso...")
-    remove_shutdown_file(SHUTDOWN_FILE_PATH)
-    sys.exit(0)
-
 # Funzione per creare il file di shutdown
 def create_shutdown_file(file_path):
     try:
@@ -132,16 +120,35 @@ def check_shutdown_file(file_path):
 
 # Gestore dei segnali per un shutdown pulito
 shutdown_requested = False
-signal.signal(signal.SIGINT, shutdown_handler)  # Ctrl+C
-signal.signal(signal.SIGTERM, shutdown_handler)  # Terminate signal
+def signal_handler(sig, frame):
+    global shutdown_requested
+    logger.info("Segnale di shutdown ricevuto. Avvio della chiusura...")
+    shutdown_requested = True
+
+# Registra i signal per il shutdown
+signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+signal.signal(signal.SIGTERM, signal_handler)  # Terminate signal
+
+# Funzione di shutdown
+def shutdown_bot():
+    logger.info("Chiusura del bot in corso...")
+    remove_shutdown_file(SHUTDOWN_FILE_PATH)
+    sys.exit(0)
 
 # Inizializza l'exchange e il saldo
 def initialize_exchange():
     global exchange, HOLDING_QUANTITY
     try:
+        # Controllo delle variabili di ambiente
+        api_key = os.environ.get('BINANCE_API_KEY')
+        api_secret = os.environ.get('BINANCE_SECRET')
+
+        if not api_key or not api_secret:
+            handle_error("BINANCE_API_KEY o BINANCE_SECRET non sono impostate nelle variabili di ambiente.", critical=True)
+
         exchange = ccxt.binance({
-            'apiKey': os.environ.get('BINANCE_API_KEY'),
-            'secret': os.environ.get('BINANCE_SECRET'),
+            'apiKey': api_key,
+            'secret': api_secret,
             'enableRateLimit': True,
             'options': {
                 'adjustForTimeDifference': True,  # This will adjust for any time differences automatically
@@ -386,15 +393,6 @@ def sync_holdings():
             HOLDING_QUANTITY = real_holdings
     except Exception as e:
         handle_error(f"Error during holdings synchronization: {str(e)}", critical=False)
-
-# Funzione per rimuovere shutdown file in caso di uscita
-def remove_shutdown_file(file_path):
-    try:
-        if os.path.isfile(file_path):
-            os.remove(file_path)
-            logger.info(f"Shutdown file {file_path} removed.")
-    except Exception as e:
-        logger.error(f"Errore nella rimozione del file di shutdown: {str(e)}")
 
 # Global variable to track the timestamp of the last processed candle
 last_candle_time = None
