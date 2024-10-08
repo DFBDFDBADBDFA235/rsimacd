@@ -7,6 +7,8 @@ import pandas as pd
 import numpy as np
 import talib
 import logging
+import socket  # for network-related errors
+import requests.exceptions  # assuming you might be using requests or other libraries for API
 
 # Initialize Variables
 CANDLE_DURATION_IN_MIN = 1
@@ -51,35 +53,70 @@ def fetch_data(ticker):
     try:
         # Fetch OHLCV data
         bars = exchange.fetch_ohlcv(ticker, timeframe=f'{CANDLE_DURATION_IN_MIN}m', limit=100)
-    except Exception as e:
-        # Log the specific error
-        logging.error(f"Error fetching data for {ticker}: {str(e)}")
-    
-    if bars is not None:
-        # Create DataFrame from the fetched data
+
+        # Verifica se nessun dato è stato ricevuto
+        if not bars:
+            raise ValueError(f"No data fetched for ticker {ticker}")
+
+        # Crea DataFrame dai dati
         ticker_df = pd.DataFrame(bars[:-1], columns=['at', 'open', 'high', 'low', 'close', 'vol'])
         ticker_df['Date'] = pd.to_datetime(ticker_df['at'], unit='ms')
         ticker_df['symbol'] = ticker
+
+        # Controllo se il DataFrame è vuoto
+        if ticker_df.empty:
+            raise ValueError(f"Received empty DataFrame for ticker {ticker}")
+
+        # Controllo valori NaN nel DataFrame
+        if ticker_df.isna().any().any():  # Se esistono NaN in qualsiasi colonna
+            logging.warning(f"Missing data detected in DataFrame for {ticker}")
+
+            # Opzioni di gestione dei dati mancanti
+            # 1. Rimuovi le righe con valori NaN
+            ticker_df = ticker_df.dropna()
+            
+            # 2. Oppure, riempi i NaN con un valore specifico (es. 0 o la media della colonna)
+            # ticker_df.fillna(0, inplace=True)  # Sostituisce NaN con 0
+            
+            # 3. Oppure interpolare i dati mancanti
+            # ticker_df.interpolate(method='linear', inplace=True)
+
+    except ConnectionError as ce:
+        logging.error(f"Connection error while fetching data for {ticker}: {str(ce)}")
+        
+    except TimeoutError as te:
+        logging.error(f"Timeout error while fetching data for {ticker}: {str(te)}")
+        
+    except ValueError as ve:
+        logging.error(f"Value error while processing data for {ticker}: {str(ve)}")
+        
+    except Exception as e:
+        logging.error(f"An unexpected error occurred while fetching data for {ticker}: {str(e)}")
+
     return ticker_df
 
-
+# Definisci la soglia per la distanza
+MIN_MACD_DISTANCE = 0.01  # Soglia minima per la distanza, può essere modificata
 
 # STEP 2: COMPUTE THE TECHNICAL INDICATORS & APPLY THE TRADING STRATEGY
 def get_trade_recommendation(ticker_df):
     macd_result, final_result = 'WAIT', 'WAIT'
 
-    # Calculate MACD
+    # Calcola il MACD
     macd, signal, hist = talib.MACD(ticker_df['close'], fastperiod=12, slowperiod=26, signalperiod=9)
+    
     last_hist = hist.iloc[-1]
     prev_hist = hist.iloc[-2]
     
-    # Check for MACD crossover
+    # Controllo per il crossover MACD con considerazione della distanza
     if not np.isnan(prev_hist) and not np.isnan(last_hist):
         macd_crossover = (prev_hist < 0 < last_hist) or (prev_hist > 0 > last_hist)  # Detect crossover
-        if macd_crossover:
+
+        # Controlla la distanza tra MACD e la linea del segnale
+        if macd_crossover and abs(last_hist) > MIN_MACD_DISTANCE:
             macd_result = 'BUY' if last_hist > 0 else 'SELL'
 
-    # If a MACD signal is generated, check RSI to confirm the signal
+    # Se viene generato un segnale MACD, controlla l'RSI per confermare il segnale
     if macd_result != 'WAIT':
         rsi = talib.RSI(ticker_df['close'], timeperiod=14)
         last_rsi = rsi.iloc[-1]
@@ -91,7 +128,6 @@ def get_trade_recommendation(ticker_df):
                 final_result = 'SELL'
     
     return final_result
-
 
 # STEP 3: EXECUTE THE TRADE
 def execute_trade(trade_rec_type, trading_ticker):
