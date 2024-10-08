@@ -9,9 +9,6 @@ import numpy as np
 import talib
 import logging
 import signal
-import smtplib
-from email.mime.text import MIMEText
-from twilio.rest import Client  # Per inviare SMS
 
 # Inizializza Variabili
 CANDLE_DURATION_IN_MIN = 1
@@ -40,53 +37,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger()
 
-# Configurazione delle Email
-EMAIL_SENDER = "your-email@example.com"
-EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
-EMAIL_RECEIVER = "recipient-email@example.com"
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-
-# Configurazione di Twilio
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
-TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
-TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
-RECIPIENT_PHONE_NUMBER = os.environ.get('RECIPIENT_PHONE_NUMBER')
-
-# Funzione per inviare email
-def send_email(subject, message):
-    try:
-        msg = MIMEText(message)
-        msg['Subject'] = subject
-        msg['From'] = EMAIL_SENDER
-        msg['To'] = EMAIL_RECEIVER
-
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-        logger.info("Email inviata con successo.")
-    except Exception as e:
-        logger.error(f"Errore nell'invio dell'email: {str(e)}")
-
-# Funzione per inviare SMS
-def send_sms(message):
-    try:
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        client.messages.create(
-            body=message,
-            from_=TWILIO_PHONE_NUMBER,
-            to=RECIPIENT_PHONE_NUMBER
-        )
-        logger.info("SMS inviato con successo.")
-    except Exception as e:
-        logger.error(f"Errore nell'invio dell'SMS: {str(e)}")
-
 # Funzione per gestire errori
 def handle_error(error_message, critical=False):
     logger.error(error_message)
-    send_email("Trading Bot Error", error_message)
-    send_sms(f"Trading Bot Alert: {error_message}")
 
     if critical:
         logger.error("Errore critico rilevato, chiusura del bot.")
@@ -262,128 +215,4 @@ def execute_trade(trade_rec_type, trading_ticker):
                     return order_placed  # Exit without placing the order
 
             # Log the order details before placing it
-            order_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-            epoch_time = int(time.time() * 1000)
-            logger.info(f"PLACING MARKET ORDER {order_time}: Ticker: {trading_ticker}, Side: {side_value}, "
-                        f"Quantity: {scrip_quantity}, Timestamp: {epoch_time}")
-            
-            # Place the market order on the exchange
-            order_response = exchange.create_market_order(trading_ticker, side_value, scrip_quantity)
-            
-            # Log the response
-            if order_response:
-                order_id = order_response['id']
-                logger.info(f'ORDER PLACED SUCCESSFULLY. RESPONSE: {order_response}')
-
-                # Monitor the order status
-                order_status = monitor_order(order_id, trading_ticker)
-
-                if order_status == 'closed':
-                    logger.info(f"ORDER EXECUTED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
-                    
-                    if trade_rec_type == "BUY":
-                        HOLDING_QUANTITY += scrip_quantity  # Add the purchased quantity
-                    else:
-                        HOLDING_QUANTITY -= scrip_quantity  # Subtract the sold quantity
-
-                    # Sincronizza immediatamente il bilancio dopo il trade
-                    sync_holdings()
-
-                    order_placed = True
-                elif order_status == 'canceled':
-                    logger.warning(f"ORDER CANCELED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
-                else:
-                    logger.warning(f"ORDER NOT FILLED: {trade_rec_type} {scrip_quantity} for {trading_ticker}")
-            else:
-                handle_error("Order response was empty or invalid.", critical=False)
-        else:
-            handle_error(f"Failed to fetch ticker data for {trading_ticker}.", critical=False)
-
-    except Exception as e:
-        handle_error(f"ALERT!!! UNABLE TO COMPLETE THE ORDER. ERROR: {str(e)}", critical=False)
-    
-    return order_placed
-
-# STEP 4: MONITOR ORDER STATUS
-def monitor_order(order_id, trading_ticker):
-    global exchange
-    start_time = time.time()
-
-    while time.time() - start_time < ORDER_TIMEOUT:
-        try:
-            # Retrieve order status from the exchange
-            order = exchange.fetch_order(order_id, trading_ticker)
-            if order and order['status'] == 'closed':
-                return 'closed'
-            elif order and order['status'] == 'canceled':
-                return 'canceled'
-
-            time.sleep(ORDER_CHECK_INTERVAL)  # Wait before the next check
-
-        except Exception as e:
-            handle_error(f"Error monitoring order {order_id}: {str(e)}", critical=False)
-
-    logger.warning(f"Order {order_id} timed out after {ORDER_TIMEOUT} seconds.")
-    return 'timeout'
-
-# STEP 5: CHECK LIQUIDITY
-def check_liquidity(ticker, quantity):
-    try:
-        # Fetch order book data
-        order_book = exchange.fetch_order_book(ticker)
-        best_bid = order_book['bids'][0][0] if order_book['bids'] else None
-        best_ask = order_book['asks'][0][0] if order_book['asks'] else None
-
-        if not best_bid or not best_ask:
-            return False  # No liquidity available
-
-        # Check if there is sufficient liquidity to execute the trade
-        return True
-    except Exception as e:
-        handle_error(f"Error checking liquidity for {ticker}: {str(e)}", critical=False)
-        return False
-
-# Sincronizza le posizioni attuali con l'exchange
-def sync_holdings():
-    global exchange, HOLDING_QUANTITY
-    try:
-        balance = exchange.fetch_balance()
-        asset = TRADING_TICKER_NAME.split('/')[0]
-        HOLDING_QUANTITY = balance['total'].get(asset, 0)
-        logger.info(f"Updated HOLDING_QUANTITY: {HOLDING_QUANTITY} {asset}")
-    except Exception as e:
-        handle_error(f"Error syncing holdings: {str(e)}", critical=False)
-
-# LOOP PRINCIPALE
-if __name__ == "__main__":
-    SHUTDOWN_FILE_PATH = "shutdown.txt"
-
-    # Avvia l'exchange e sincronizza il saldo
-    initialize_exchange()
-
-    # Loop principale del bot
-    while not shutdown_requested and not check_shutdown_file(SHUTDOWN_FILE_PATH):
-        try:
-            # Step 1: Fetch the data
-            df = fetch_data(CCXT_TICKER_NAME)
-
-            if df is not None:
-                # Step 2: Apply the trading strategy
-                trade_signal = get_trade_recommendation(df)
-                logger.info(f"Signal: {trade_signal}")
-
-                # Step 3: Execute the trades
-                if trade_signal != "WAIT":
-                    order_executed = execute_trade(trade_signal, TRADING_TICKER_NAME)
-                    if order_executed:
-                        logger.info("Trade eseguito con successo.")
-                    else:
-                        logger.info("Nessun trade eseguito.")
-
-            time.sleep(60)  # Pausa di 60 secondi tra ogni ciclo
-
-        except Exception as e:
-            handle_error(f"Unhandled exception in the main loop: {str(e)}", critical=False)
-
-    # Chiusura del bot
-    shutdown_bot()
+           
