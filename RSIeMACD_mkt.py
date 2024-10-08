@@ -211,8 +211,61 @@ def execute_trade(trade_rec_type, trading_ticker):
                 
                 # Check for liquidity
                 if not check_liquidity(trading_ticker, scrip_quantity):
-                    handle_error("Insufficient funds to complete the sell order.", critical=False)
-                    return order_placed  # Exit without placing the order
+                    handle_error("Insufficient liquidity for the SELL order.", critical=False)
+                    return order_placed
 
-            # Log the order details before placing it
-           
+            # Place order
+            if trade_rec_type in ["BUY", "SELL"]:
+                order = exchange.create_market_order(trading_ticker, side_value, scrip_quantity)
+                logger.info(f"{side_value.upper()} order placed: {order}")
+                order_placed = True
+
+                # Update holding quantity if the order is filled
+                if trade_rec_type == "BUY":
+                    HOLDING_QUANTITY += scrip_quantity
+                else:
+                    HOLDING_QUANTITY -= scrip_quantity
+
+    except ccxt.BaseError as e:
+        handle_error(f"Order placement failed: {str(e)}", critical=False)
+
+    return order_placed
+
+# STEP 4: RUNNING THE BOT
+def run_bot():
+    while True:
+        try:
+            if shutdown_requested:
+                shutdown_bot()
+
+            # Fetch ticker data
+            ticker_df = fetch_data(CCXT_TICKER_NAME)
+            if ticker_df is None or ticker_df.empty:
+                continue  # Prova a recuperare i dati nuovamente nel prossimo ciclo
+
+            # Get trade recommendation
+            trade_recommendation = get_trade_recommendation(ticker_df)
+
+            # Execute trade if a valid signal is detected
+            if trade_recommendation in ["BUY", "SELL"]:
+                execute_trade(trade_recommendation, TRADING_TICKER_NAME)
+
+            # Controlla ogni minuto
+            time.sleep(60)
+
+        except Exception as e:
+            handle_error(f"Uncaught error: {str(e)}", critical=False)
+
+# Avvio del bot
+if __name__ == "__main__":
+    try:
+        SHUTDOWN_FILE_PATH = "shutdown.txt"
+        if check_shutdown_file(SHUTDOWN_FILE_PATH):
+            logger.info("Shutdown file trovato, il bot non sarà avviato.")
+            sys.exit(0)
+
+        initialize_exchange()
+        run_bot()
+
+    except Exception as e:
+        handle_error(f"Fatal error during bot initialization: {str(e)}", critical=True)
