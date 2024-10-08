@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import ccxt
 import pandas as pd
@@ -20,6 +20,10 @@ HOLDING_QUANTITY = 0
 
 CCXT_TICKER_NAME = 'BTC/USDT'
 TRADING_TICKER_NAME = 'BTC/USDT'
+
+# Parametri per il monitoraggio degli ordini
+ORDER_CHECK_INTERVAL = 5  # Intervallo in secondi tra i controlli dello stato dell'ordine
+ORDER_TIMEOUT = 300       # Timeout totale in secondi per l'esecuzione dell'ordine
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -189,23 +193,30 @@ def execute_trade(trade_rec_type, trading_ticker):
             # Place the order on the exchange
             order_response = exchange.create_limit_order(trading_ticker, side_value, scrip_quantity, current_price)
             
-            # Log the response and update the held quantity
+            # Log the response
             if order_response:
+                order_id = order_response['id']
                 logging.info(f'ORDER PLACED SUCCESSFULLY. RESPONSE: {order_response}')
-                # Log trade details for executed trades
-                trade_execution_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-                logging.info(f"TRADE EXECUTED {trade_execution_time}: {trade_rec_type} {scrip_quantity} "
-                             f"at {current_price} for {trading_ticker}")
-                
-                if trade_rec_type == "BUY":
-                    HOLDING_QUANTITY += scrip_quantity  # Add the purchased quantity
+
+                # Monitor the order status
+                order_status = monitor_order(order_id, trading_ticker)
+
+                if order_status == 'closed':
+                    logging.info(f"ORDER EXECUTED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
+                    
+                    if trade_rec_type == "BUY":
+                        HOLDING_QUANTITY += scrip_quantity  # Add the purchased quantity
+                    else:
+                        HOLDING_QUANTITY -= scrip_quantity  # Subtract the sold quantity
+
+                    # Sincronizza immediatamente il bilancio dopo il trade
+                    sync_holdings()
+
+                    order_placed = True
+                elif order_status == 'canceled':
+                    logging.warning(f"ORDER CANCELED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
                 else:
-                    HOLDING_QUANTITY -= scrip_quantity  # Subtract the sold quantity
-
-                # Sincronizza immediatamente il bilancio dopo il trade
-                sync_holdings()
-
-                order_placed = True
+                    logging.warning(f"ORDER NOT FILLED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
             else:
                 logging.error("Order response was empty or invalid.")
         else:
@@ -215,6 +226,47 @@ def execute_trade(trade_rec_type, trading_ticker):
         logging.error(f"ALERT!!! UNABLE TO COMPLETE THE ORDER. ERROR: {str(e)}")
     
     return order_placed
+
+def monitor_order(order_id, trading_ticker):
+    """
+    Monitora lo stato dell'ordine fino a quando non viene eseguito, annullato o scade il timeout.
+    Restituisce lo stato finale dell'ordine: 'closed', 'canceled', 'open', o 'expired'.
+    """
+    global exchange
+    start_time = time.time()
+    while True:
+        try:
+            order = exchange.fetch_order(order_id, TRADING_TICKER_NAME)
+            status = order['status']
+            logging.debug(f"Monitora ordine {order_id}: Stato attuale: {status}")
+
+            if status == 'closed':
+                return 'closed'
+            elif status == 'canceled':
+                return 'canceled'
+            elif status in ['open', 'partial']:
+                if time.time() - start_time > ORDER_TIMEOUT:
+                    logging.warning(f"ORDER TIMEOUT: {order_id} for {trading_ticker} has not been filled within {ORDER_TIMEOUT} seconds.")
+                    # Annulla l'ordine se non è stato eseguito entro il timeout
+                    try:
+                        exchange.cancel_order(order_id, TRADING_TICKER_NAME)
+                        logging.info(f"ORDER CANCELED DUE TO TIMEOUT: {order_id} for {trading_ticker}")
+                        return 'canceled'
+                    except Exception as e:
+                        logging.error(f"Error canceling order {order_id}: {str(e)}")
+                        return 'expired'
+                time.sleep(ORDER_CHECK_INTERVAL)
+            else:
+                return status  # Restituisce lo stato se non è né 'open' né 'partial'
+        except ccxt.NetworkError as ce:
+            logging.error(f"Network error while monitoring order {order_id}: {str(ce)}")
+        except ccxt.ExchangeError as ee:
+            logging.error(f"Exchange error while monitoring order {order_id}: {str(ee)}")
+        except Exception as e:
+            logging.error(f"Unexpected error while monitoring order {order_id}: {str(e)}")
+        
+        # Attendi prima di ritentare
+        time.sleep(ORDER_CHECK_INTERVAL)
 
 # Funzione per sincronizzare il saldo
 def sync_holdings():
@@ -315,6 +367,9 @@ def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path='shutdown
 # Avvio del bot
 if __name__ == "__main__":
     try:
-        run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME)
+        SHUTDOWN_FILE_PATH = 'shutdown_bot.txt'
+        run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME, SHUTDOWN_FILE_PATH)
     except KeyboardInterrupt:
         logging.info("Bot stopped manually.")
+
+
