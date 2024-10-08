@@ -300,11 +300,11 @@ def execute_trade(trade_rec_type, trading_ticker):
             # Log the order details before placing it
             order_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
             epoch_time = int(time.time() * 1000)
-            logger.info(f"PLACING ORDER {order_time}: Ticker: {trading_ticker}, Side: {side_value}, "
-                        f"Price: {current_price}, Quantity: {scrip_quantity}, Timestamp: {epoch_time}")
+            logger.info(f"PLACING MARKET ORDER {order_time}: Ticker: {trading_ticker}, Side: {side_value}, "
+                        f"Quantity: {scrip_quantity}, Timestamp: {epoch_time}")
             
-            # Place the order on the exchange
-            order_response = exchange.create_limit_order(trading_ticker, side_value, scrip_quantity, current_price)
+            # Place the market order on the exchange
+            order_response = exchange.create_market_order(trading_ticker, side_value, scrip_quantity)
             
             # Log the response
             if order_response:
@@ -329,7 +329,7 @@ def execute_trade(trade_rec_type, trading_ticker):
                 elif order_status == 'canceled':
                     logger.warning(f"ORDER CANCELED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
                 else:
-                    logger.warning(f"ORDER NOT FILLED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
+                    logger.warning(f"ORDER NOT FILLED: {trade_rec_type} {scrip_quantity} for {trading_ticker}")
             else:
                 handle_error("Order response was empty or invalid.", critical=False)
         else:
