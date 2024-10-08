@@ -1,4 +1,4 @@
-Controllare che lo script BNB check login sia un file py e funzioni (pull/push/creo da cli)
+test ip 
 Error handling: Non gestisce in modo dettagliato errori o eccezioni, potrebbe essere utile aggiungere più logging o strategie di recupero.
 Ottimizzazione: Potrebbe essere migliorato con logiche più complesse di gestione del rischio e analisi delle performance storiche (backtesting).
 
