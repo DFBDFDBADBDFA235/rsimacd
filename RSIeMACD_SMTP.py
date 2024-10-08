@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
+import sys
 import ccxt
 import pandas as pd
 import numpy as np
 import talib
 import logging
 import signal
+import smtplib
+from email.mime.text import MIMEText
+from twilio.rest import Client  # Per inviare SMS
 
-# Initialize Variables
+# Inizializza Variabili
 CANDLE_DURATION_IN_MIN = 1
 RSI_OVERSOLD = 25
 RSI_OVERBOUGHT = 75
@@ -25,37 +29,139 @@ TRADING_TICKER_NAME = 'BTC/USDT'
 ORDER_CHECK_INTERVAL = 5  # Intervallo in secondi tra i controlli dello stato dell'ordine
 ORDER_TIMEOUT = 300       # Timeout totale in secondi per l'esecuzione dell'ordine
 
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s',
-                    handlers=[logging.FileHandler("trading_bot.log"),
-                              logging.StreamHandler()])
+# Configurazione del Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("trading_bot.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger()
 
-try:
-    exchange = ccxt.binance({
-        'apiKey': os.environ.get('BINANCE_API_KEY'),
-        'secret': os.environ.get('BINANCE_SECRET'),
-        'enableRateLimit': True,
-        'options': {
-            'adjustForTimeDifference': True,  # This will adjust for any time differences automatically
-        }
-    })
+# Configurazione delle Email
+EMAIL_SENDER = "your-email@example.com"
+EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
+EMAIL_RECEIVER = "recipient-email@example.com"
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
 
-    # Tenta di accedere alle informazioni del conto
-    balance = exchange.fetch_balance()
-    print("Connessione riuscita!")
-    print(f"Saldo disponibile in USDT: {balance['USDT']['free']}")
+# Configurazione di Twilio
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
+TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
+RECIPIENT_PHONE_NUMBER = os.environ.get('RECIPIENT_PHONE_NUMBER')
 
-    # Inizializza HOLDING_QUANTITY basandosi sul saldo reale
-    asset = TRADING_TICKER_NAME.split('/')[0]  # 'BTC' in questo caso
-    HOLDING_QUANTITY = balance['total'].get(asset, 0)
-    logging.info(f"Inizializzazione HOLDING_QUANTITY: {HOLDING_QUANTITY} {asset}")
+# Funzione per inviare email
+def send_email(subject, message):
+    try:
+        msg = MIMEText(message)
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_SENDER
+        msg['To'] = EMAIL_RECEIVER
 
-except ccxt.AuthenticationError:
-    logging.error("Errore di autenticazione. Verifica le tue credenziali API.")
-    exit(1)
-except Exception as e:
-    logging.error(f"Si è verificato un errore durante la connessione: {str(e)}")
-    exit(1)
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        logger.info("Email inviata con successo.")
+    except Exception as e:
+        logger.error(f"Errore nell'invio dell'email: {str(e)}")
+
+# Funzione per inviare SMS
+def send_sms(message):
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client.messages.create(
+            body=message,
+            from_=TWILIO_PHONE_NUMBER,
+            to=RECIPIENT_PHONE_NUMBER
+        )
+        logger.info("SMS inviato con successo.")
+    except Exception as e:
+        logger.error(f"Errore nell'invio dell'SMS: {str(e)}")
+
+# Funzione per gestire errori
+def handle_error(error_message, critical=False):
+    logger.error(error_message)
+    send_email("Trading Bot Error", error_message)
+    send_sms(f"Trading Bot Alert: {error_message}")
+
+    if critical:
+        logger.error("Errore critico rilevato, chiusura del bot.")
+        remove_shutdown_file(SHUTDOWN_FILE_PATH)
+        sys.exit(1)
+    else:
+        logger.info("Errore non critico, il bot riproverà a ripartire in 30 secondi...")
+        time.sleep(30)  # Attende 30 secondi prima di riprovare
+
+# Funzione per inviare shutdown
+def shutdown_handler(sig, frame):
+    global shutdown_requested
+    logger.info("Segnale di shutdown ricevuto. Avvio della chiusura...")
+    shutdown_requested = True
+
+# Funzione per inviare shutdown
+def shutdown_bot():
+    logger.info("Chiusura del bot in corso...")
+    remove_shutdown_file(SHUTDOWN_FILE_PATH)
+    sys.exit(0)
+
+# Funzione per creare il file di shutdown
+def create_shutdown_file(file_path):
+    try:
+        with open(file_path, 'w') as f:
+            f.write("Shutdown requested.")
+        logger.info(f"Shutdown file {file_path} creato.")
+    except Exception as e:
+        logger.error(f"Errore nella creazione del file di shutdown: {str(e)}")
+
+# Funzione per rimuovere il file di shutdown
+def remove_shutdown_file(file_path):
+    try:
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+            logger.info(f"Shutdown file {file_path} rimosso.")
+    except Exception as e:
+        logger.error(f"Errore nella rimozione del file di shutdown: {str(e)}")
+
+# Funzione per controllare se esiste il file di shutdown
+def check_shutdown_file(file_path):
+    return os.path.isfile(file_path)
+
+# Gestore dei segnali per un shutdown pulito
+shutdown_requested = False
+signal.signal(signal.SIGINT, shutdown_handler)  # Ctrl+C
+signal.signal(signal.SIGTERM, shutdown_handler)  # Terminate signal
+
+# Inizializza l'exchange e il saldo
+def initialize_exchange():
+    global exchange, HOLDING_QUANTITY
+    try:
+        exchange = ccxt.binance({
+            'apiKey': os.environ.get('BINANCE_API_KEY'),
+            'secret': os.environ.get('BINANCE_SECRET'),
+            'enableRateLimit': True,
+            'options': {
+                'adjustForTimeDifference': True,  # This will adjust for any time differences automatically
+            }
+        })
+
+        # Tenta di accedere alle informazioni del conto
+        balance = exchange.fetch_balance()
+        logger.info("Connessione riuscita!")
+        logger.info(f"Saldo disponibile in USDT: {balance['USDT']['free']}")
+
+        # Inizializza HOLDING_QUANTITY basandosi sul saldo reale
+        asset = TRADING_TICKER_NAME.split('/')[0]  # 'BTC' in questo caso
+        HOLDING_QUANTITY = balance['total'].get(asset, 0)
+        logger.info(f"Inizializzazione HOLDING_QUANTITY: {HOLDING_QUANTITY} {asset}")
+
+    except ccxt.AuthenticationError:
+        handle_error("Errore di autenticazione. Verifica le tue credenziali API.", critical=True)
+    except Exception as e:
+        handle_error(f"Si è verificato un errore durante la connessione: {str(e)}", critical=True)
 
 # STEP 1: FETCH THE DATA
 def fetch_data(ticker):
@@ -80,21 +186,21 @@ def fetch_data(ticker):
 
         # Controllo valori NaN nel DataFrame
         if ticker_df.isna().any().any():  # Se esistono NaN in qualsiasi colonna
-            logging.warning(f"Missing data detected in DataFrame for {ticker}")
+            logger.warning(f"Missing data detected in DataFrame for {ticker}")
 
             # Opzioni di gestione dei dati mancanti
             ticker_df = ticker_df.dropna()  # Rimuove le righe con NaN
 
     except ccxt.NetworkError as ce:
-        logging.error(f"Connection error while fetching data for {ticker}: {str(ce)}")
+        handle_error(f"Connection error while fetching data for {ticker}: {str(ce)}", critical=False)
     except ccxt.ExchangeError as ee:
-        logging.error(f"Exchange error while fetching data for {ticker}: {str(ee)}")
+        handle_error(f"Exchange error while fetching data for {ticker}: {str(ee)}", critical=False)
     except TimeoutError as te:
-        logging.error(f"Timeout error while fetching data for {ticker}: {str(te)}")
+        handle_error(f"Timeout error while fetching data for {ticker}: {str(te)}", critical=False)
     except ValueError as ve:
-        logging.error(f"Value error while processing data for {ticker}: {str(ve)}")
+        handle_error(f"Value error while processing data for {ticker}: {str(ve)}", critical=False)
     except Exception as e:
-        logging.error(f"An unexpected error occurred while fetching data for {ticker}: {str(e)}")
+        handle_error(f"An unexpected error occurred while fetching data for {ticker}: {str(e)}", critical=False)
 
     return ticker_df
 
@@ -142,7 +248,7 @@ def check_liquidity(trading_ticker, scrip_quantity):
         available_balance = HOLDING_QUANTITY  # Poiché abbiamo sincronizzato
         return available_balance >= scrip_quantity
     except Exception as e:
-        logging.error(f"Error fetching balance for liquidity check: {str(e)}")
+        handle_error(f"Error fetching balance for liquidity check: {str(e)}", critical=False)
         return False
 
 def validate_trade_params(trade_rec_type, scrip_quantity):
@@ -150,7 +256,7 @@ def validate_trade_params(trade_rec_type, scrip_quantity):
     # Sincronizza il bilancio prima di validare
     sync_holdings()
     if trade_rec_type == "SELL" and scrip_quantity > HOLDING_QUANTITY:
-        logging.error("Tentativo di vendere più di quanto si possiede.")
+        handle_error("Tentativo di vendere più di quanto si possiede.", critical=False)
         return False
     return True
 
@@ -176,19 +282,19 @@ def execute_trade(trade_rec_type, trading_ticker):
             # Ensure not selling more than held
             if trade_rec_type == "SELL":
                 if scrip_quantity > HOLDING_QUANTITY:
-                    logging.error("Attempting to sell more than held.")
+                    handle_error("Attempting to sell more than held.", critical=False)
                     return order_placed  # Exit without placing the order
                 
                 # Check for liquidity
                 if not check_liquidity(trading_ticker, scrip_quantity):
-                    logging.error("Insufficient funds to complete the sell order.")
+                    handle_error("Insufficient funds to complete the sell order.", critical=False)
                     return order_placed  # Exit without placing the order
 
             # Log the order details before placing it
             order_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
             epoch_time = int(time.time() * 1000)
-            logging.info(f"PLACING ORDER {order_time}: Ticker: {trading_ticker}, Side: {side_value}, "
-                         f"Price: {current_price}, Quantity: {scrip_quantity}, Timestamp: {epoch_time}")
+            logger.info(f"PLACING ORDER {order_time}: Ticker: {trading_ticker}, Side: {side_value}, "
+                        f"Price: {current_price}, Quantity: {scrip_quantity}, Timestamp: {epoch_time}")
             
             # Place the order on the exchange
             order_response = exchange.create_limit_order(trading_ticker, side_value, scrip_quantity, current_price)
@@ -196,13 +302,13 @@ def execute_trade(trade_rec_type, trading_ticker):
             # Log the response
             if order_response:
                 order_id = order_response['id']
-                logging.info(f'ORDER PLACED SUCCESSFULLY. RESPONSE: {order_response}')
+                logger.info(f'ORDER PLACED SUCCESSFULLY. RESPONSE: {order_response}')
 
                 # Monitor the order status
                 order_status = monitor_order(order_id, trading_ticker)
 
                 if order_status == 'closed':
-                    logging.info(f"ORDER EXECUTED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
+                    logger.info(f"ORDER EXECUTED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
                     
                     if trade_rec_type == "BUY":
                         HOLDING_QUANTITY += scrip_quantity  # Add the purchased quantity
@@ -214,16 +320,16 @@ def execute_trade(trade_rec_type, trading_ticker):
 
                     order_placed = True
                 elif order_status == 'canceled':
-                    logging.warning(f"ORDER CANCELED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
+                    logger.warning(f"ORDER CANCELED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
                 else:
-                    logging.warning(f"ORDER NOT FILLED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
+                    logger.warning(f"ORDER NOT FILLED: {trade_rec_type} {scrip_quantity} at {current_price} for {trading_ticker}")
             else:
-                logging.error("Order response was empty or invalid.")
+                handle_error("Order response was empty or invalid.", critical=False)
         else:
-            logging.error(f"Failed to fetch ticker data for {trading_ticker}.")
+            handle_error(f"Failed to fetch ticker data for {trading_ticker}.", critical=False)
 
     except Exception as e:
-        logging.error(f"ALERT!!! UNABLE TO COMPLETE THE ORDER. ERROR: {str(e)}")
+        handle_error(f"ALERT!!! UNABLE TO COMPLETE THE ORDER. ERROR: {str(e)}", critical=False)
     
     return order_placed
 
@@ -238,7 +344,7 @@ def monitor_order(order_id, trading_ticker):
         try:
             order = exchange.fetch_order(order_id, TRADING_TICKER_NAME)
             status = order['status']
-            logging.debug(f"Monitora ordine {order_id}: Stato attuale: {status}")
+            logger.debug(f"Monitora ordine {order_id}: Stato attuale: {status}")
 
             if status == 'closed':
                 return 'closed'
@@ -246,24 +352,24 @@ def monitor_order(order_id, trading_ticker):
                 return 'canceled'
             elif status in ['open', 'partial']:
                 if time.time() - start_time > ORDER_TIMEOUT:
-                    logging.warning(f"ORDER TIMEOUT: {order_id} for {trading_ticker} has not been filled within {ORDER_TIMEOUT} seconds.")
+                    logger.warning(f"ORDER TIMEOUT: {order_id} for {trading_ticker} has not been filled within {ORDER_TIMEOUT} seconds.")
                     # Annulla l'ordine se non è stato eseguito entro il timeout
                     try:
                         exchange.cancel_order(order_id, TRADING_TICKER_NAME)
-                        logging.info(f"ORDER CANCELED DUE TO TIMEOUT: {order_id} for {trading_ticker}")
+                        logger.info(f"ORDER CANCELED DUE TO TIMEOUT: {order_id} for {trading_ticker}")
                         return 'canceled'
                     except Exception as e:
-                        logging.error(f"Error canceling order {order_id}: {str(e)}")
+                        handle_error(f"Error canceling order {order_id}: {str(e)}", critical=False)
                         return 'expired'
                 time.sleep(ORDER_CHECK_INTERVAL)
             else:
                 return status  # Restituisce lo stato se non è né 'open' né 'partial'
         except ccxt.NetworkError as ce:
-            logging.error(f"Network error while monitoring order {order_id}: {str(ce)}")
+            handle_error(f"Network error while monitoring order {order_id}: {str(ce)}", critical=False)
         except ccxt.ExchangeError as ee:
-            logging.error(f"Exchange error while monitoring order {order_id}: {str(ee)}")
+            handle_error(f"Exchange error while monitoring order {order_id}: {str(ee)}", critical=False)
         except Exception as e:
-            logging.error(f"Unexpected error while monitoring order {order_id}: {str(e)}")
+            handle_error(f"Unexpected error while monitoring order {order_id}: {str(e)}", critical=False)
         
         # Attendi prima di ritentare
         time.sleep(ORDER_CHECK_INTERVAL)
@@ -276,34 +382,26 @@ def sync_holdings():
         asset = TRADING_TICKER_NAME.split('/')[0]  # 'BTC' in questo caso
         real_holdings = balance['total'].get(asset, 0)
         if real_holdings != HOLDING_QUANTITY:
-            logging.info(f"Sincronizzazione HOLDING_QUANTITY: {HOLDING_QUANTITY} -> {real_holdings}")
+            logger.info(f"Sincronizzazione HOLDING_QUANTITY: {HOLDING_QUANTITY} -> {real_holdings}")
             HOLDING_QUANTITY = real_holdings
     except Exception as e:
-        logging.error(f"Error during holdings synchronization: {str(e)}")
+        handle_error(f"Error during holdings synchronization: {str(e)}", critical=False)
 
-# Funzioni per gestire il shutdown
-shutdown_requested = False
-
-def signal_handler(sig, frame):
-    """Handle signals to initiate a graceful shutdown."""
-    global shutdown_requested
-    logging.info("Shutdown signal received. Initiating shutdown...")
-    shutdown_requested = True
-
-def check_shutdown_file(file_path):
-    """Check if a specific shutdown file exists."""
-    return os.path.isfile(file_path)
+# Funzione per rimuovere shutdown file in caso di uscita
+def remove_shutdown_file(file_path):
+    try:
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+            logger.info(f"Shutdown file {file_path} removed.")
+    except Exception as e:
+        logger.error(f"Errore nella rimozione del file di shutdown: {str(e)}")
 
 # Global variable to track the timestamp of the last processed candle
 last_candle_time = None
 
-def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path='shutdown.txt'):
+def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path='shutdown_bot.txt'):
     global shutdown_requested, last_candle_time
     currently_holding = False
-
-    # Register the signal handler for graceful shutdown
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
 
     while not shutdown_requested:
         try:
@@ -316,60 +414,70 @@ def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path='shutdown
                 # Check if a new candle has been generated
                 if last_candle_time is None or latest_candle_time > last_candle_time:
                     # Log that a new candle is available
-                    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - New candle detected.')
+                    logger.info(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - New candle detected.")
 
                     # Update the last candle time
                     last_candle_time = latest_candle_time
 
                     # Log the current price fetched from the ticker
                     current_price = ticker_data.iloc[-1]['close']  # Get the closing price of the latest candle
-                    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Ticker: {ccxt_ticker}, Current Price: {current_price}')
+                    logger.info(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Ticker: {ccxt_ticker}, Current Price: {current_price}")
 
                     # STEP 2: COMPUTE TECHNICAL INDICATORS & APPLY THE TRADING STRATEGY
                     trade_rec_type = get_trade_recommendation(ticker_data)
-                    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - TRADING RECOMMENDATION: {trade_rec_type}')
+                    logger.info(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - TRADING RECOMMENDATION: {trade_rec_type}")
 
                     # STEP 3: EXECUTE THE TRADE
                     if (trade_rec_type == 'BUY' and not currently_holding) or \
                        (trade_rec_type == 'SELL' and currently_holding):
 
-                        logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Placing {trade_rec_type} order for {trading_ticker}')
+                        logger.info(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Placing {trade_rec_type} order for {trading_ticker}")
 
                         # Execute the trade
                         trade_successful = execute_trade(trade_rec_type, trading_ticker)
 
                         if trade_successful:
-                            logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Trade {trade_rec_type} for {trading_ticker} successful.')
+                            logger.info(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Trade {trade_rec_type} for {trading_ticker} successful.")
                             currently_holding = not currently_holding
                         else:
-                            logging.error(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Failed to execute {trade_rec_type} order for {trading_ticker}')
+                            logger.error(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Failed to execute {trade_rec_type} order for {trading_ticker}")
                 
                 # No new candle, sleep for a shorter duration
                 else:
                     time.sleep(10)  # Sleep for 10 seconds before checking again
 
             else:
-                logging.warning(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Unable to fetch ticker data for {ccxt_ticker}. Retrying in 5 seconds.')
+                logger.warning(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Unable to fetch ticker data for {ccxt_ticker}. Retrying in 5 seconds.")
                 time.sleep(5)
 
             # Check for shutdown file
             if check_shutdown_file(shutdown_file_path):
-                logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Shutdown file detected. Initiating shutdown...')
+                logger.info(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Shutdown file detected. Initiating shutdown...")
                 shutdown_requested = True
 
         except Exception as e:
-            logging.error(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Error in bot execution: {str(e)}")
+            handle_error(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Error in bot execution: {str(e)}", critical=False)
             time.sleep(10)  # Wait before retrying to avoid hammering the API
 
     # Cleanup and exit
-    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Bot has shut down safely.')
+    logger.info(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} - Bot has shut down safely.")
+    shutdown_bot()
 
-# Avvio del bot
+# Funzione principale per gestire il riavvio del bot
+def main():
+    while True:
+        initialize_exchange()
+        run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME)
+        if shutdown_requested:
+            break
+        logger.info("Riavvio del bot in corso...")
+        time.sleep(5)  # Attende 5 secondi prima di riavviare
+
+# Esegui il bot
 if __name__ == "__main__":
     try:
         SHUTDOWN_FILE_PATH = 'shutdown_bot.txt'
-        run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME, SHUTDOWN_FILE_PATH)
+        main()
     except KeyboardInterrupt:
-        logging.info("Bot stopped manually.")
-
-
+        logger.info("Bot interrotto manualmente.")
+        shutdown_bot()
