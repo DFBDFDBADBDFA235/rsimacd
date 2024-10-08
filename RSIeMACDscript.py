@@ -231,8 +231,11 @@ def check_shutdown_file(file_path):
     """Check if a specific shutdown file exists."""
     return os.path.isfile(file_path)
 
+# Global variable to track the timestamp of the last processed candle
+last_candle_time = None
+
 def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path):
-    global shutdown_requested
+    global shutdown_requested, last_candle_time
     currently_holding = False
 
     # Register the signal handler for graceful shutdown
@@ -243,41 +246,43 @@ def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path):
             # STEP 1: FETCH THE DATA
             ticker_data = fetch_data(ccxt_ticker)
             if ticker_data is not None:
-                # Log the current price fetched from the ticker
-                current_price = ticker_data['info']['last_price']
-                logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Ticker: {ccxt_ticker}, Current Price: {current_price}')
+                # Extract the timestamp of the latest candle (this is the 'at' column in ticker_df)
+                latest_candle_time = ticker_data.iloc[-1]['at']  # Last row in the DataFrame
 
-                # STEP 2: COMPUTE TECHNICAL INDICATORS & APPLY THE TRADING STRATEGY
-                trade_rec_type = get_trade_recommendation(ticker_data)
-                logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - TRADING RECOMMENDATION: {trade_rec_type}')
+                # Check if a new candle has been generated
+                if last_candle_time is None or latest_candle_time > last_candle_time:
+                    # Log that a new candle is available
+                    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - New candle detected.')
 
-                # STEP 3: EXECUTE THE TRADE
-                if (trade_rec_type == 'BUY' and not currently_holding) or \
-                   (trade_rec_type == 'SELL' and currently_holding):
-                    
-                    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Placing {trade_rec_type} order for {trading_ticker}')
+                    # Update the last candle time
+                    last_candle_time = latest_candle_time
 
-                    # Execute the trade and retrieve trade details (amount, price)
-                    trade_successful = execute_trade(trade_rec_type, trading_ticker)
+                    # Log the current price fetched from the ticker
+                    current_price = ticker_data.iloc[-1]['close']  # Get the closing price of the latest candle
+                    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Ticker: {ccxt_ticker}, Current Price: {current_price}')
 
-                    if trade_successful:
-                        logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Trade {trade_rec_type} for {trading_ticker} successful.')
-                        
-                        # Assuming `execute_trade` returns the amount and price as part of the response
-                        trade_amount = trade_successful.get('amount')
-                        trade_price = trade_successful.get('price')
-                        
-                        # Log detailed trade info
-                        logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Executed {trade_rec_type} order: '
-                                     f'Amount: {trade_amount}, Price: {trade_price}, Ticker: {trading_ticker}')
+                    # STEP 2: COMPUTE TECHNICAL INDICATORS & APPLY THE TRADING STRATEGY
+                    trade_rec_type = get_trade_recommendation(ticker_data)
+                    logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - TRADING RECOMMENDATION: {trade_rec_type}')
 
-                        # Update the currently holding status
-                        currently_holding = not currently_holding
-                    else:
-                        logging.error(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Failed to execute {trade_rec_type} order for {trading_ticker}')
-                    
-                # Sleep until the next candle duration
-                time.sleep(CANDLE_DURATION_IN_MIN * 60)
+                    # STEP 3: EXECUTE THE TRADE
+                    if (trade_rec_type == 'BUY' and not currently_holding) or \
+                       (trade_rec_type == 'SELL' and currently_holding):
+
+                        logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Placing {trade_rec_type} order for {trading_ticker}')
+
+                        # Execute the trade
+                        trade_successful = execute_trade(trade_rec_type, trading_ticker)
+
+                        if trade_successful:
+                            logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Trade {trade_rec_type} for {trading_ticker} successful.')
+                            currently_holding = not currently_holding
+                        else:
+                            logging.error(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Failed to execute {trade_rec_type} order for {trading_ticker}')
+                
+                # No new candle, sleep for a shorter duration
+                else:
+                    time.sleep(10)  # Sleep for 10 seconds before checking again
 
             else:
                 logging.warning(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Unable to fetch ticker data for {ccxt_ticker}. Retrying in 5 seconds.')
@@ -294,9 +299,6 @@ def run_bot_for_ticker(ccxt_ticker, trading_ticker, shutdown_file_path):
 
     # Cleanup and exit
     logging.info(f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")} - Bot has shut down safely.')
-
-
-
 
  try:
        run_bot_for_ticker(CCXT_TICKER_NAME, TRADING_TICKER_NAME)
