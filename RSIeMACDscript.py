@@ -129,8 +129,20 @@ def get_trade_recommendation(ticker_df):
     
     return final_result
 
-# STEP 3: EXECUTE THE TRADE
-def execute_trade(trade_rec_type, trading_ticker):
+# STEP 3: check liquidity
+def check_liquidity(trading_ticker, scrip_quantity):
+    """Controlla se ci sono sufficienti fondi per vendere."""
+    try:
+        # Fetch il saldo corrente
+        account_balance = exchange.fetch_balance()
+        available_balance = account_balance['total'][trading_ticker.split('/')[0]]  # Assumendo che il ticker sia nel formato 'BTC/USD'
+        return available_balance >= scrip_quantity
+    except Exception as e:
+        logging.error(f"Error fetching balance for liquidity check: {str(e)}")
+        return False
+
+# STEP 4: EXECUTE THE TRADE (both buy and sell)
+def execute_trade(trade_rec_type, trading_ticker): 
     global exchange, HOLDING_QUANTITY, INVESTMENT_AMOUNT_PER_TRADE
     order_placed = False
     side_value = 'buy' if trade_rec_type == "BUY" else 'sell'
@@ -141,25 +153,39 @@ def execute_trade(trade_rec_type, trading_ticker):
         if ticker_request is not None:
             current_price = float(ticker_request['info']['last_price'])
 
-            # Calculate scrip quantity for the order
+            # Calcola la quantità di scrip per l'ordine
             if trade_rec_type == "BUY":
                 scrip_quantity = round(INVESTMENT_AMOUNT_PER_TRADE / current_price, 5)
             else:
+                # Per le vendite, utilizza la quantità detenuta
                 scrip_quantity = HOLDING_QUANTITY
+            
+            # Assicurati di non vendere più di quanto si possiede
+            if trade_rec_type == "SELL":
+                if scrip_quantity > HOLDING_QUANTITY:
+                    logging.error("Tentativo di vendere più di quanto si possiede.")
+                    return order_placed  # Esci senza effettuare l'ordine
+                
+                # Controlla la liquidità
+                if not check_liquidity(trading_ticker, scrip_quantity):
+                    logging.error("Fondi insufficienti per completare la vendita.")
+                    return order_placed  # Esci senza effettuare l'ordine
 
-            # Log order details before placing
+            # Log dei dettagli dell'ordine prima di piazzarlo
             order_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
             epoch_time = int(time.time() * 1000)
             logging.info(f"PLACING ORDER {order_time}: {trading_ticker}, {side_value}, {current_price}, {scrip_quantity}, {epoch_time}")
             
-            # Place the order on the exchange
+            # Effettua l'ordine sull'exchange
             order_response = exchange.create_limit_order(trading_ticker, side_value, scrip_quantity, current_price)
             
-            # Log the response and update holding quantity if the order is a buy
+            # Log della risposta e aggiornamento della quantità detenuta
             if order_response:
                 logging.info(f'ORDER PLACED. RESPONSE: {order_response}')
                 if trade_rec_type == "BUY":
-                    HOLDING_QUANTITY = scrip_quantity
+                    HOLDING_QUANTITY += scrip_quantity  # Aggiungi la quantità acquistata
+                else:  # Se è una vendita
+                    HOLDING_QUANTITY -= scrip_quantity  # Sottrai la quantità venduta
 
                 order_placed = True
             else:
@@ -171,6 +197,7 @@ def execute_trade(trade_rec_type, trading_ticker):
         logging.error(f"ALERT!!! UNABLE TO COMPLETE THE ORDER. ERROR: {str(e)}")
     
     return order_placed
+
 
 def run_bot_for_ticker(ccxt_ticker, trading_ticker):
     currently_holding = False
